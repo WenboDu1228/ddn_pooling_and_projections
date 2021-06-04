@@ -1,0 +1,716 @@
+# IMAGENET CLASSIFICATION WITH DECLARATIVE PROJECTION NODES
+# Dylan Campbell <dylan.campbell@anu.edu.au>
+# Stephen Gould <stephen.gould@anu.edu.au>
+#
+# Modified from PyTorch ImageNet example:
+# https://github.com/pytorch/examples/blob/ee964a2eeb41e1712fe719b83645c79bcbd0ba1a/imagenet/main.py
+# with mean average precision code adapted from:
+# https://github.com/rbgirshick/py-faster-rcnn/blob/781a917b378dbfdedb45b6a56189a31982da1b43/lib/datasets/voc_eval.py
+
+import argparse
+import os
+import random
+import shutil
+import time
+import warnings
+import numpy as np
+
+import torch
+import torch.nn as nn
+import torch.nn.parallel
+import torch.backends.cudnn as cudnn
+import torch.distributed as dist
+import torch.optim
+import torch.multiprocessing as mp
+import torch.utils.data
+import torch.utils.data.distributed
+#import torch.utils.tensorboard as tb
+import torchvision.transforms as transforms
+import torchvision.datasets as datasets
+import torchvision.models as models
+import utils_projection as utils
+import sys
+sys.path.append("../../../")
+import ddn.pytorch.learnable_projections as projections
+import ddn.pytorch.robust_loss_pytorch.util as util
+import ddn.pytorch.robustpool_tmp as robustpool
+import pandas as pd
+
+#torch.manual_seed(2809)
+
+model_names = sorted(name for name in models.__dict__
+    if name.islower() and not name.startswith("__")
+    and callable(models.__dict__[name]))
+
+parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
+parser.add_argument('data', metavar='DIR',
+                    help='path to dataset')
+parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
+                    choices=model_names,
+                    help='model architecture: ' +
+                        ' | '.join(model_names) +
+                        ' (default: resnet18)')
+parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+                    help='number of data loading workers (default: 4)')
+parser.add_argument('--epochs', default=90, type=int, metavar='N',
+                    help='number of total epochs to run')
+parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
+                    help='manual epoch number (useful on restarts)')
+parser.add_argument('-b', '--batch-size', default=256, type=int,
+                    metavar='N',
+                    help='mini-batch size (default: 256), this is the total '
+                         'batch size of all GPUs on the current node when '
+                         'using Data Parallel or Distributed Data Parallel')
+parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+                    metavar='LR', help='initial learning rate', dest='lr')
+parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
+                    help='momentum')
+parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
+                    metavar='W', help='weight decay (default: 1e-4)',
+                    dest='weight_decay')
+parser.add_argument('-p', '--print_freq', default=1000, type=int,
+                    metavar='N', help='print frequency (default: 10)')
+parser.add_argument('--resume', default='', type=str, metavar='PATH',
+                    help='path to latest checkpoint (default: none)')
+parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
+                    help='evaluate model on validation set')
+parser.add_argument('--pretrained', dest='pretrained', action='store_true',
+                    help='use pre-trained model')
+parser.add_argument('--world-size', default=-1, type=int,
+                    help='number of nodes for distributed training')
+parser.add_argument('--rank', default=-1, type=int,
+                    help='node rank for distributed training')
+parser.add_argument('--dist-url', default='tcp://224.66.41.62:23456', type=str,
+                    help='url used to set up distributed training')
+parser.add_argument('--dist-backend', default='nccl', type=str,
+                    help='distributed backend')
+parser.add_argument('--seed', default=None, type=int,
+                    help='seed for initializing training. ')
+parser.add_argument('--scale', default=1.0, type=float,
+                    help='seed for initializing training. ')
+parser.add_argument('--gpu', default=None, type=int,
+                    help='GPU id to use.')
+parser.add_argument('--multiprocessing-distributed', action='store_true',
+                    help='Use multi-processing distributed training to launch '
+                         'N processes per node, which has N GPUs. This is the '
+                         'fastest way to use PyTorch for either single node or '
+                         'multi node data parallel training')
+parser.add_argument('--log-dir', dest='log_dir', default='', type=str,
+                    help='Directory for logging loss and accuracy')
+parser.add_argument('--projection-type', dest='projection_type', type=str, default='',
+                    help="Euclidean projection type {L1S, L1B, L2S, L2B, LInfS, LInfB, ''}")
+parser.add_argument('--robust_type', dest='robust_type', type=str, default='',
+                    help="Robust type {L1S, L1B, L2S, L2B, LInfS, LInfB, ''}")
+parser.add_argument('--radius', default=None, type=float,
+                    help='Lp-sphere or ball radius')
+parser.add_argument('--train_radius', default=0, type=int,
+                    help='Lp-sphere or ball radius')                
+parser.add_argument('--outliers', default=0, type=float,
+                    help='Lp-sphere or ball radius')
+parser.add_argument('--train_scale', default=0, type=int,
+                    help='Lp-sphere or ball radius')
+parser.add_argument('--train_outlier', default=1, type=int,help='Lp-sphere or ball radius')
+
+best_acc1 = 0
+best_acc1_train = 0
+best_map = 0
+best_map_train = 0
+
+
+def main():
+    args = parser.parse_args()
+
+    #args.writer = tb.SummaryWriter(log_dir=args.log_dir) if args.log_dir else None
+
+    if args.seed is not None:
+        random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        cudnn.deterministic = True
+        warnings.warn('You have chosen to seed training. '
+                      'This will turn on the CUDNN deterministic setting, '
+                      'which can slow down your training considerably! '
+                      'You may see unexpected behavior when restarting '
+                      'from checkpoints.')
+
+    if args.gpu is not None:
+        warnings.warn('You have chosen a specific GPU. This will completely '
+                      'disable data parallelism.')
+
+    if args.dist_url == "env://" and args.world_size == -1:
+        args.world_size = int(os.environ["WORLD_SIZE"])
+
+    args.distributed = args.world_size > 1 or args.multiprocessing_distributed
+
+    ngpus_per_node = torch.cuda.device_count()
+    if args.multiprocessing_distributed:
+        # Since we have ngpus_per_node processes per node, the total world_size
+        # needs to be adjusted accordingly
+        args.world_size = ngpus_per_node * args.world_size
+        # Use torch.multiprocessing.spawn to launch distributed processes: the
+        # main_worker process function
+        mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
+    else:
+        # Simply call main_worker function
+        main_worker(args.gpu, ngpus_per_node, args)
+
+    # if args.writer:
+    #     args.writer.close()
+
+
+def main_worker(gpu, ngpus_per_node, args):
+    global best_acc1
+    global best_acc1_train
+    global best_map
+    global best_map_train
+    args.gpu = gpu
+    accs=[]
+    #scales=[]
+    #scales_transformed=[]
+    #alphas=[]
+    #alphas_transformed=[]
+    radius_list=[]
+    radius_transformed_list=[]
+    train_accs=[]
+    maps=[]
+    train_maps=[]
+    if args.gpu is not None:
+        print("Use GPU: {} for training".format(args.gpu))
+
+    if args.distributed:
+        if args.dist_url == "env://" and args.rank == -1:
+            args.rank = int(os.environ["RANK"])
+        if args.multiprocessing_distributed:
+            # For multiprocessing distributed training, rank needs to be the
+            # global rank among all the processes
+            args.rank = args.rank * ngpus_per_node + gpu
+        dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
+                                world_size=args.world_size, rank=args.rank)
+    # create model
+    #print(models)
+    #if True:
+    if args.pretrained:
+        print("=> using pre-trained model '{}'".format(args.arch))
+        model = models.__dict__[args.arch](pretrained=True)
+    else:
+        print("=> creating model '{}'".format(args.arch))
+        model = models.__dict__[args.arch]()
+    # Insert BN layer and Lp-sphere or Lp-ball projection layer before FC layer
+    #print(model)
+    if args.projection_type == 'L1S':
+        method = projections.L1Sphere
+    elif args.projection_type == 'L1B':
+        method = projections.L1Ball
+    elif args.projection_type == 'L2S':
+        method = projections.L2Sphere
+    elif args.projection_type == 'L2B':
+        method = projections.L2Ball
+    elif args.projection_type == 'LInfS':
+        method = projections.LInfSphere
+    elif args.projection_type == 'LInfB':
+        method = projections.LInfBall
+    else:
+        method = None
+    #print(model)
+    #if False:
+    args.radius=torch.tensor([args.radius])
+    #if False:
+    if args.arch=='resnet18':
+        model.fc=nn.Linear(in_features=512, out_features=10, bias=True)
+        in_features=model.fc.in_features
+    elif args.arch=='vgg11':
+        model.classifier[-1]=nn.Linear(in_features=4096, out_features=10, bias=True)
+        in_features=4096
+    elif args.arch=='alexnet':
+        model.classifier[-1]=nn.Linear(in_features=4096, out_features=10, bias=True)
+        in_features=4096
+    elif args.arch=='googlenet':
+        model.fc=nn.Linear(in_features=1024, out_features=10, bias=True)
+        in_features=model.fc.in_features
+    elif args.arch=='densenet121':
+        model.classifier=nn.Linear(in_features=1024, out_features=10, bias=True)
+        in_features=model.classifier.in_features
+    #print(model)
+    if method:
+        print('Prepending FC layer with a BN layer and an {} projection layer with radius {}'.format(method.__name__, args.radius))
+        batchnorm = nn.BatchNorm1d(in_features, eps=1e-05, momentum=0.1, affine=False) # without learnable parameters
+        #args.radius=torch.tensor([args.radius])
+        projection = projections.EuclideanProjection(method=method, radius=args.radius, train_radius=args.train_radius)
+        #print(model.fc)
+        #model.fc=nn.Linear(512, 200)
+        #print(model.fc)
+        if args.arch=='resnet18':
+            model.fc = nn.Sequential(batchnorm, projection, model.fc)
+        elif args.arch=='vgg11':
+            model.classifier=nn.Sequential(model.classifier[:-1],batchnorm,projection,model.classifier[-1])
+        elif args.arch=='alexnet':
+            model.classifier=nn.Sequential(model.classifier[:-1],batchnorm,projection,model.classifier[-1])
+        elif args.arch=='googlenet':
+            model.fc=nn.Sequential(batchnorm,projection, model.fc)
+        elif args.arch=='densenet121':
+            model.classifier=nn.Sequential(projection,model.classifier)
+    #from torchinfo import summary
+    #print(model)
+    #summary(model, input_size=(128, 3, 224, 224))
+        #print(model.fc)
+        #print(model.fc)
+    #print(model)
+    # if args.robust_type=='Q':
+    #     model.avgpool=robustpool.RobustGlobalPool2d(robustpool.Quadratic,args.scale,train_scale=args.train_scale)
+    # elif args.robust_type=='PH':
+    #     print('using PH')
+    #     model.avgpool=robustpool.RobustGlobalPool2d(robustpool.PseudoHuber,args.scale,train_scale=args.train_scale)
+    # elif args.robust_type=='H':
+    #     model.avgpool=robustpool.RobustGlobalPool2d(robustpool.Huber,args.scale,train_scale=args.train_scale)
+    # elif args.robust_type=='W':
+    #     model.avgpool=robustpool.RobustGlobalPool2d(robustpool.Welsch,args.scale,train_scale=args.train_scale)
+    # elif args.robust_type=='TQ':
+    #     model.avgpool=robustpool.RobustGlobalPool2d(robustpool.TruncatedQuadratic,args.scale,train_scale=args.train_scale)
+    #print(model)
+    #summary(model.cuda(), (3, 224, 224))
+    if args.distributed:
+        # For multiprocessing distributed, DistributedDataParallel constructor
+        # should always set the single device scope, otherwise,
+        # DistributedDataParallel will use all available devices.
+        if args.gpu is not None:
+            torch.cuda.set_device(args.gpu)
+            model.cuda(args.gpu)
+            # When using a single GPU per process and per
+            # DistributedDataParallel, we need to divide the batch size
+            # ourselves based on the total number of GPUs we have
+            args.batch_size = int(args.batch_size / ngpus_per_node)
+            args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
+            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+        else:
+            model.cuda()
+            # DistributedDataParallel will divide and allocate batch_size to all
+            # available GPUs if device_ids are not set
+            model = torch.nn.parallel.DistributedDataParallel(model)
+    elif args.gpu is not None:
+        torch.cuda.set_device(args.gpu)
+        model = model.cuda(args.gpu)
+    else:
+        # DataParallel will divide and allocate batch_size to all available GPUs
+        if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
+            model.features = torch.nn.DataParallel(model.features)
+            model.cuda()
+        else:
+            model = torch.nn.DataParallel(model).cuda()
+
+    # define loss function (criterion) and optimizer
+    criterion = nn.CrossEntropyLoss().cuda(args.gpu)
+    base_params=list(model.parameters())[:-3]+list(model.parameters())[-2:]
+    avg_params=list(model.parameters())[-3]
+    #print(avg_params)
+    if args.arch=='alexnet':
+        optimizer = torch.optim.SGD(model.parameters(), 0.01,
+                                 momentum=args.momentum,
+                                 weight_decay=args.weight_decay)
+    elif args.arch=='vgg11':
+        optimizer = torch.optim.SGD(model.parameters(), 0.01,
+                                 momentum=args.momentum,
+                                 weight_decay=args.weight_decay)
+    else:
+        optimizer = torch.optim.SGD([{'params': base_params}, {'params': avg_params, 'lr': 0.01}], lr=args.lr, momentum=args.momentum,weight_decay=args.weight_decay)
+    # print(asdasdasd)
+    # optionally resume from a checkpoint
+    if args.resume:
+        if os.path.isfile(args.resume):
+            print("=> loading checkpoint '{}'".format(args.resume))
+            if args.gpu is None:
+                checkpoint = torch.load(args.resume)
+            else:
+                # Map model to be loaded to specified single gpu.
+                loc = 'cuda:{}'.format(args.gpu)
+                checkpoint = torch.load(args.resume, map_location=loc)
+            args.start_epoch = checkpoint['epoch']
+            best_acc1 = checkpoint['best_acc1']
+            if args.gpu is not None:
+                # best_acc1 may be from a checkpoint from a different GPU
+                best_acc1 = best_acc1.to(args.gpu)
+            model.load_state_dict(checkpoint['state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            print("=> loaded checkpoint '{}' (epoch {})"
+                  .format(args.resume, checkpoint['epoch']))
+        else:
+            print("=> no checkpoint found at '{}'".format(args.resume))
+
+    cudnn.benchmark = True
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+
+    # Data loading code
+
+
+    # trainset = datasets.CIFAR100(
+    #     root='./data', train=True, download=True, transform=transform_train)
+    # train_loader = torch.utils.data.DataLoader(
+    #     trainset, batch_size=128, shuffle=True, num_workers=2)
+
+    # valset = datasets.CIFAR100(
+    #     root='./data', train=False, download=True, transform=transform_test)
+    # val_loader = torch.utils.data.DataLoader(
+    #     valset, batch_size=100, shuffle=False, num_workers=2)
+    # num_class=100
+    print('root:',args.data)
+    print('projections',args.projection_type)
+    print('net',args.arch)
+    traindir = os.path.join(args.data, 'train')
+    valdir = os.path.join(args.data, 'val')
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+    if args.data.split('/')[-1]!='cifar10':
+        train_dataset = datasets.ImageFolder(
+            traindir,
+            transforms.Compose([
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize,
+            ]))
+
+        if args.distributed:
+            train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+        else:
+            train_sampler = None
+
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+            num_workers=args.workers, pin_memory=True, sampler=train_sampler)
+    else:
+        #print('aa')
+        trainset = datasets.CIFAR10(
+        root='./data', train=True, download=True, transform=transforms.Compose([transforms.Resize(256),transforms.RandomResizedCrop(224),transforms.RandomHorizontalFlip(),transforms.ToTensor(),normalize]))
+        train_loader = torch.utils.data.DataLoader(
+            trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers)
+    if args.data.split('/')[-1]!='cifar10':
+        val_loader = torch.utils.data.DataLoader(
+            datasets.ImageFolder(valdir, transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize,
+            ])),
+            batch_size=args.batch_size, shuffle=False,
+            num_workers=args.workers, pin_memory=True)
+    else:
+        print('aa')
+        valset = datasets.CIFAR10(
+             root='./data', train=False, download=True, transform=transforms.Compose([transforms.Resize(256),transforms.ToTensor(),normalize]))
+        val_loader = torch.utils.data.DataLoader(
+             valset, batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+
+    num_class=10
+
+
+    if args.evaluate:
+        validate(val_loader, model, criterion, 0, args)
+        return
+
+    for epoch in range(args.start_epoch, args.epochs):
+        # if args.distributed:
+        #     train_sampler.set_epoch(epoch)
+        adjust_learning_rate(optimizer, epoch, args)
+
+        # train for one epoch
+        train(train_loader, model, criterion, optimizer, epoch, args,train_accs)
+
+        # evaluate on validation set
+        acc1,map = validate(val_loader, model, criterion, epoch, args)
+        #train_acc1,train_map=validate(train_loader, model, criterion, epoch, args)
+        train_acc1=0
+        train_map=0
+        # remember best acc@1 and save checkpoint
+        is_best = acc1 > best_acc1
+        best_acc1 = max(acc1, best_acc1)
+        best_map =max(map, best_map)
+        is_best_train = train_acc1 > best_acc1_train
+        best_acc1_train = max(train_acc1, best_acc1_train)
+        best_map_train = max(train_map,best_map_train)
+        print('acc1:',round(float(acc1),3),'best acc:',round(float(best_acc1),3),'map',round(map,3),'best map',round(best_map,3))
+        #print('train acc1:',round(float(train_acc1),3),'train best acc:',round(float(best_acc1_train),3),'train map',round(train_map,3),'best train map',round(best_map_train,3))
+        accs.append(acc1)
+        maps.append(map)
+        train_accs.append(train_acc1)
+        train_maps.append(train_map)
+        # if args.robust_type!='':
+        #     scales.append(np.array(model.avgpool.scale.detach().cpu()))
+        #     scales_transformed.append(np.array(util.affine_softplus(model.avgpool.scale,lo=1e-5, ref=1.0).detach().cpu()))
+        # else:
+        #     scales.append(0)
+        #     scales_transformed.append(0)
+        if args.projection_type=='':
+            radius_list.append(0)
+            radius_transformed_list.append(0)
+        else:
+            #print('r:',np.array(util.affine_softplus(model.fc[1].radius,lo=1e-5, ref=250.0).detach().cpu()))
+            if args.arch=='resnet18':
+                r=np.array(model.fc[1].radius.detach().cpu())
+            elif args.arch=='alexnet':
+                r=np.array(model.classifier[2].radius.detach().cpu())
+            elif args.arch=='vgg11':
+                r=np.array(model.classifier[2].radius.detach().cpu())
+            elif args.arch=='googlenet':
+                r=np.array(model.fc[1].radius.detach().cpu())
+            elif args.arch=='densenet121':
+                r=np.array(model.classifier[0].radius.detach().cpu())
+            radius_list.append(r)
+            radius_transformed_list.append(np.array(util.affine_softplus(r,lo=1e-5, ref=250.0)))
+        
+    #print(accs,train_accs,radius_transformed_list)
+    # print(scales)
+    # print(scales_transformed)
+    filename=str(args.projection_type)+'_'+str(args.epochs)+'_'+str(args.radius.item())+'_'+str(num_class)+'_'+str(args.train_radius)+'_'+args.data.split('/')[-1]+'_'+args.arch+'.csv'
+    df = pd.DataFrame({"train maps":train_maps,"maps":maps,"train_accs" : train_accs, "accs" : accs, 'r':radius_list,'scales_transformed':radius_transformed_list})
+    df.to_csv(filename, index=False)
+
+
+def train(train_loader, model, criterion, optimizer, epoch, args,train_accs):
+    batch_time = AverageMeter('Time', ':6.3f')
+    data_time = AverageMeter('Data', ':6.3f')
+    losses = AverageMeter('Loss', ':.4e')
+    top1 = AverageMeter('Acc@1', ':6.2f')
+    top5 = AverageMeter('Acc@5', ':6.2f')
+    progress = ProgressMeter(
+        len(train_loader),
+        [batch_time, data_time, losses, top1, top5],
+        prefix="Epoch: [{}]".format(epoch))
+
+    # switch to train mode
+    model.train()
+    correct = 0
+    total = 0
+    end = time.time()
+    for i, (images, target) in enumerate(train_loader):
+        # measure data loading time
+        data_time.update(time.time() - end)
+
+        if args.gpu is not None:
+            images = images.cuda(args.gpu, non_blocking=True)
+            args.radius=args.radius.cuda(args.gpu,non_blocking=True)
+        target = target.cuda(args.gpu, non_blocking=True)
+        # compute output
+        output = model(images)
+        #if args.arch=='googlenet':
+        #        output=output.logits
+        loss = criterion(output, target)
+        _, predicted = output.max(1)
+        total += target.size(0)
+        correct += predicted.eq(target).sum().item()
+        # measure accuracy and record loss
+        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        losses.update(loss.item(), images.size(0))
+        top1.update(acc1[0], images.size(0))
+        top5.update(acc5[0], images.size(0))
+        # compute gradient and do SGD step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        #if args.writer:
+        if True:
+            global_step = epoch * len(train_loader) + i
+            # args.writer.add_scalar('loss_train', loss.item(), global_step=global_step)
+            # args.writer.add_scalar('top1_train', acc1[0], global_step=global_step)
+            # args.writer.add_scalar('top5_train', acc5[0], global_step=global_step)
+        #if i % args.print_freq == 0:
+        if False:
+            #print("the radius",model.fc)
+            progress.display(i)
+    #print('accuracy:',correct/total)
+
+
+def validate(val_loader, model, criterion, epoch, args):
+    batch_time = AverageMeter('Time', ':6.3f')
+    losses = AverageMeter('Loss', ':.4e')
+    top1 = AverageMeter('Acc@1', ':6.2f')
+    top5 = AverageMeter('Acc@5', ':6.2f')
+    progress = ProgressMeter(
+        len(val_loader),
+        [batch_time, losses, top1, top5],
+        prefix='Test: ')
+
+    # switch to evaluate mode
+    model.eval()
+
+    with torch.no_grad():
+        outputs = torch.empty(0)
+        targets = torch.empty(0, dtype=torch.long)
+        end = time.time()
+        for i, (images, target) in enumerate(val_loader):
+            if args.gpu is not None:
+                images = images.cuda(args.gpu, non_blocking=True)
+            target = target.cuda(args.gpu, non_blocking=True)
+
+            # compute output
+            output = model(images)
+
+            loss = criterion(output, target)
+
+            # measure accuracy and record loss
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            losses.update(loss.item(), images.size(0))
+            top1.update(acc1[0], images.size(0))
+            top5.update(acc5[0], images.size(0))
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            # if i % args.print_freq == 0:
+            #     progress.display(i)
+
+            outputs = torch.cat((outputs, output.cpu()), dim=0)
+            targets = torch.cat((targets, target.cpu()), dim=0)
+
+        map, aps = mean_average_precision(outputs, targets)
+        # TODO: this should also be done with the ProgressMeter
+        # print(' * Acc@1 {top1.avg:.4f} Acc@5 {top5.avg:.4f} mAP {map:.4f}'
+        #       .format(top1=top1, top5=top5, map=map))
+
+        # if args.writer:
+        #     args.writer.add_scalar('loss_val', losses.avg, global_step=epoch)
+        #     args.writer.add_scalar('top1_val', top1.avg, global_step=epoch)
+        #     args.writer.add_scalar('top5_val', top5.avg, global_step=epoch)
+        #     args.writer.add_scalar('map_val', map, global_step=epoch)
+        #train_accs.append(top1.avg)
+    return top1.avg,map
+
+
+def save_checkpoint(state, is_best, dir='', filename='checkpoint.pth.tar'):
+    torch.save(state, dir + filename)
+    if is_best:
+        shutil.copyfile(dir + filename, dir + 'model_best.pth.tar')
+
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self, name, fmt=':f'):
+        self.name = name
+        self.fmt = fmt
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+    def __str__(self):
+        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
+        return fmtstr.format(**self.__dict__)
+
+
+class ProgressMeter(object):
+    def __init__(self, num_batches, meters, prefix=""):
+        self.batch_fmtstr = self._get_batch_fmtstr(num_batches)
+        self.meters = meters
+        self.prefix = prefix
+
+    def display(self, batch):
+        entries = [self.prefix + self.batch_fmtstr.format(batch)]
+        entries += [str(meter) for meter in self.meters]
+        print('\t'.join(entries))
+
+    def _get_batch_fmtstr(self, num_batches):
+        num_digits = len(str(num_batches // 1))
+        fmt = '{:' + str(num_digits) + 'd}'
+        return '[' + fmt + '/' + fmt.format(num_batches) + ']'
+
+
+def adjust_learning_rate(optimizer, epoch, args):
+    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
+    if args.arch=='alexnet' or args.arch=='vgg11':
+        #lr = args.lr * (0.5 ** (epoch // 30))
+        return
+    else:
+        lr = args.lr * (0.1 ** (epoch // 30))
+    #for param_group in optimizer.param_groups[0]:
+    optimizer.param_groups[0]['lr'] = lr
+
+
+def accuracy(output, target, topk=(1,)):
+    """Computes the accuracy over the k top predictions for the specified values of k"""
+    with torch.no_grad():
+        maxk = max(topk)
+        batch_size = target.size(0)
+        _, pred = output.topk(maxk, 1, True, True)
+        pred = pred.t()
+
+        correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+        res = []
+        for k in topk:
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.mul_(100.0 / batch_size))
+        return res
+
+def mean_average_precision(output, target):
+    with torch.no_grad():
+        num_samples = output.size()[0]
+        num_classes = output.size()[1]
+        # Convert to numpy
+        output = output.numpy()
+        target = target.numpy()
+        # Sort by confidence
+        sorted_ind = np.argsort(-output, axis=0)
+        aps = []
+        for n in range(6):
+            npos = (target == n).sum()
+            tp = np.zeros(num_samples)
+            fp = np.zeros(num_samples)
+            for i in range(num_samples):
+                if target[sorted_ind[i, n]] == n:
+                    tp[i] = 1.
+                else:
+                    fp[i] = 1.
+            # compute precision recall
+            fp = np.cumsum(fp)
+            tp = np.cumsum(tp)
+            # rec = tp / float(npos)
+            rec = tp / np.maximum(float(npos), np.finfo(np.float64).eps)
+            prec = tp / np.maximum(tp + fp, np.finfo(np.float64).eps)
+            ap = voc_ap(rec, prec, use_07_metric=False)
+            aps += [ap]
+    return np.mean(aps), aps
+
+def voc_ap(rec, prec, use_07_metric=False):
+    """ ap = voc_ap(rec, prec, [use_07_metric])
+    Compute VOC AP given precision and recall.
+    If use_07_metric is true, uses the
+    VOC 07 11 point method (default:False).
+    """
+    if use_07_metric:
+        # 11 point metric
+        ap = 0.
+        for t in np.arange(0., 1.1, 0.1):
+            if np.sum(rec >= t) == 0:
+                p = 0
+            else:
+                p = np.max(prec[rec >= t])
+            ap = ap + p / 11.
+    else:
+        # correct AP calculation
+        # first append sentinel values at the end
+        mrec = np.concatenate(([0.], rec, [1.]))
+        mpre = np.concatenate(([0.], prec, [0.]))
+        # compute the precision envelope
+        for i in range(mpre.size - 1, 0, -1):
+            mpre[i - 1] = np.maximum(mpre[i - 1], mpre[i])
+        # to calculate area under PR curve, look for points
+        # where X axis (recall) changes value
+        i = np.where(mrec[1:] != mrec[:-1])[0]
+        # and sum (\Delta recall) * prec
+        ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
+    return ap
+from torchsummary import summary
+if __name__ == '__main__':
+    main()
