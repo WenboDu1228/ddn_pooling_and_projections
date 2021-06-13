@@ -7,9 +7,13 @@
 # with penalty function phi in
 # {quadratic, pseudo-huber, huber, welsch, truncated quadratic}
 #
+# this code is base on the work of:
 # Dylan Campbell <dylan.campbell@anu.edu.au>
 # Stephen Gould <stephen.gould@anu.edu.au>
 #
+# We add learnable threshold c to pseudo-huber, huber, welsch pooling.
+# In particular, we adaptive a loss function from Jonathan Barron (https://arxiv.org/pdf/1701.03077.pdf)
+
 
 import torch
 from ddn.pytorch.robust_loss_pytorch.adaptive import *
@@ -79,12 +83,13 @@ class PseudoHuber():
 
     @staticmethod
     def Dy(z, scale = 1.0):
-        # Derivative of y(x) for the pseudo-Huber penalty function
+        # Derivative of y(x), y(c) for the pseudo-Huber penalty function
         w = torch.pow(1.0 + torch.pow(z, 2) / (scale * scale), -1.5)
         w_sum = w.sum(dim=-1, keepdim=True).sum(dim=-2, keepdim=True)
         Dy_at_x = torch.where(w_sum.abs() <= 1e-9, torch.zeros_like(w), w.div(w_sum.expand_as(w)))
         Dy_at_scale=None
         if scale.requires_grad:
+            # Derivative y(c)
             w_scale=torch.pow(z,3)/(torch.pow(torch.pow(z/scale,2)+1,1.5)*torch.pow(scale,3))
             w_scale=-torch.sum(w_scale,dim=1,keepdim=True)
             Dy_at_scale = torch.where(w_sum.abs() <= 1e-9, torch.zeros_like(w_scale), w_scale.div(w_sum.expand_as(w_scale)))
@@ -122,12 +127,13 @@ class Huber():
 
     # @staticmethod
     def Dy(z, scale = 1.0):
-        # Derivative of y(x) for the Huber penalty function
+        # Derivative of y(x), y(c) for the Huber penalty function
         w = torch.where(z.abs() <= scale, torch.ones_like(z), torch.zeros_like(z))
         w_sum = w.sum(dim=-1, keepdim=True).sum(dim=-2, keepdim=True)
         Dy_at_x = torch.where(w_sum.abs() <= 1e-9, torch.zeros_like(w), w.div(w_sum.expand_as(w)))
         Dy_at_scale=None
         if scale.requires_grad:
+            # Derivative y(c)
             w_scale= -torch.where(z.abs()<=scale,torch.zeros_like(z),torch.where(z>=scale,torch.ones_like(z),-torch.ones_like(z)))
             w_scale=torch.sum(w_scale,dim=1,keepdim=True)
             Dy_at_scale= torch.where(w_sum.abs() <= 1e-9, torch.zeros_like(w_scale), w_scale.div(w_sum))
@@ -163,7 +169,7 @@ class Welsch():
 
     @staticmethod
     def Dy(z, scale = 1.0):
-        # Derivative of y(x) for the Welsch penalty function
+        # Derivative of y(x), y(c) for the Welsch penalty function
         scale2 = scale * scale
         z2_on_scale2 = torch.pow(z, 2) / scale2
         w = (1.0 - z2_on_scale2) * torch.exp(-0.5 * z2_on_scale2) / scale2
@@ -172,6 +178,7 @@ class Welsch():
         Dy_at_x = torch.clamp(Dy_at_x, -1.0, 1.0) # Clip gradients to +/- 1
         Dy_at_scale=None
         if scale.requires_grad:
+            # Derivative y(c)
             w_scale = (torch.exp(-0.5 * z2_on_scale2)*(2*z*scale2-torch.pow(z,3))/(scale**5))
             w_scale=torch.sum(w_scale,dim=1,keepdim=True)
             Dy_at_scale =torch.where(w_sum.abs() <= 1e-9, torch.zeros_like(w_scale), w_scale.div(w_sum))
@@ -227,6 +234,7 @@ class AdaptiveAndGeneral():
 
     @staticmethod
     def Dy(z, alpha = 1.0, scale = 1.0):
+        # Derivative of y(x), y(alpha), y(c) for the general and adaptive penalty function
         abs_a_minus=torch.abs(alpha-2)
         scale_pow=torch.pow(scale,2)
         z_pow=torch.pow(z,2)
@@ -238,12 +246,14 @@ class AdaptiveAndGeneral():
         dycl=None
         dyal=None
         if scale.requires_grad: 
+            # Derivative y(c)
             dyc= ((abs_a_minus*z*term_1*(2*abs_a_minus*scale_pow+alpha*z_pow))/(scale*torch.pow((abs_a_minus*scale_pow+z_pow),2)))
             dyc=dyc.sum(-1)
             dycl=dyc.unsqueeze(-1)
             dycl=dycl/dyy_sum
             dycl=torch.clamp(dycl,-1.0,1.0)
         if alpha.requires_grad:
+            # Derivative y(alpha)
             dya=z*torch.pow(term_2,alpha/2-1)*(torch.log(term_2)/2-((z_pow*(alpha/2-1))/(scale_pow*term_2*abs_a_minus*(alpha-2))))
             dya=(dya/scale_pow).sum(-1)
             dyal=dya.unsqueeze(-1)
@@ -281,7 +291,7 @@ class RobustGlobalPool2dFn(torch.autograd.Function):
         input_size = x.size()
         assert len(input_size) >= 2, "input must at least 2D (%d < 2)" % len(input_size)
         scale_scalar = scale.detach()
-        #assert scale.item() > 0.0, "scale must be strictly positive (%f <= 0)" % scale.item()
+        assert scale.item() > 0.0, "scale must be strictly positive (%f <= 0)" % scale.item()
         x = x.detach()
         x = x.flatten(end_dim=-3) if len(input_size) > 2 else x
         # Handle non-convex functions separately
@@ -328,43 +338,35 @@ class RobustGlobalPool2dFn(torch.autograd.Function):
         return grad_input_x, None,grad_input_scale
 
 class RobustGlobalPool2d(torch.nn.Module):
-    def __init__(self, method, scale=1.0,is_image=True):
+    def __init__(self, method, scale=1.0,is_image=True, train_scale=False):
         super(RobustGlobalPool2d, self).__init__()
         self.method = method
-        self.register_buffer('scale', torch.tensor([scale]))
+        scale=util.inv_affine_softplus(scale,lo=1e-5,ref=1.0)
+        if train_scale==1:
+            self.scale = torch.nn.Parameter(torch.tensor([scale], dtype=torch.float,device='cuda', requires_grad=True))
+        else:
+            self.register_buffer('scale', torch.tensor([scale]))
         self.is_image=is_image
 
     def forward(self, input):
-        #print('input shape:',input.shape)
-        #print(aaaa)
+        # flatten matrix for image classification features.
         if self.is_image:
-            #print('aa')
             input=input.flatten(start_dim=-2, end_dim=-1).unsqueeze(-1)
-            # print('value',input.max(dim=2)[0].mean(),input.min(dim=2)[0].mean())
-            # print('variance',input.var(dim=2)[0].mean())
+        scale=util.affine_softplus(self.scale,lo=1e-5, ref=1.0)
         output= RobustGlobalPool2dFn.apply(input,
                                           self.method,
-                                          self.scale
+                                          scale
                                           )
         if self.is_image:
             output=output.unsqueeze(-1).unsqueeze(-1)
-        #print('output shape',output.shape)
-        #print(asdasd)
         return output
-
-    def extra_repr(self):
-        return 'method={}, scale={}'.format(
-            self.method, self.scale
-        )
 
 class AdaptiveAndGeneralFn(torch.autograd.Function):
     """
-    A function to globally pool a 2D response matrix using a robust penalty function
+    A function to globally pool a 2D response matrix using general and adaptive penalty function
     """
     @staticmethod
     def runOptimisation( x,y,alpha,scale):
-        #latent_alpha=latent_alpha.clone()
-        #latent_scale=latent_scale.clone()
         with torch.enable_grad():
             opt = torch.optim.LBFGS([y],
                                     lr=1, # Default: 1
@@ -422,10 +424,6 @@ class AdaptiveAndGeneralFn(torch.autograd.Function):
             grad_input_alpha =dalpha.unsqueeze(-1) *grad_output if dalpha!=None else None
             grad_input_scale=dscale.unsqueeze(-1)*grad_output if dscale!=None else None
             grad_input_x = grad_input_x.reshape(input_size)
-            # if grad_input_alpha!=None and grad_input_alpha.shape!=alpha.shape:
-            #     grad_input_alpha=grad_input_alpha.sum(0).squeeze(-1)
-            # if grad_input_scale!=None and grad_input_scale.shape!=scale.shape:
-            #     grad_input_scale=grad_input_scale.sum(0).squeeze(-1)
         return grad_input_x , grad_input_alpha,grad_input_scale
     def gradient(self,x,scale,y):
         x.requires_grad_()

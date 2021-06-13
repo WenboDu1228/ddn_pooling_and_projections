@@ -24,16 +24,15 @@ import torch.optim
 import torch.multiprocessing as mp
 import torch.utils.data
 import torch.utils.data.distributed
-#import torch.utils.tensorboard as tb
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 import utils
 import sys
 sys.path.append("../../../")
-#import ddn.pytorch.learnable_projections as projections
+
 import ddn.pytorch.robust_loss_pytorch.util as util
-import ddn.pytorch.robustpool_tmp as robustpool
+import ddn.pytorch.robustpool as robustpool
 import pandas as pd
 
 #torch.manual_seed(2809)
@@ -176,29 +175,12 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
-    # Insert BN layer and Lp-sphere or Lp-ball projection layer before FC layer
-    # if args.projection_type == 'L1S':
-    #     method = projections.L1Sphere
-    # elif args.projection_type == 'L1B':
-    #     method = projections.L1Ball
-    # elif args.projection_type == 'L2S':
-    #     method = projections.L2Sphere
-    # elif args.projection_type == 'L2B':
-    #     method = projections.L2Ball
-    # elif args.projection_type == 'LInfS':
-    #     method = projections.LInfSphere
-    # elif args.projection_type == 'LInfB':
-    #     method = projections.LInfBall
-    # else:
-    #     method = None
-    #print(model)
-    method=None
+
 
 
     if args.robust_type=='Q':
         model.avgpool=robustpool.RobustGlobalPool2d(robustpool.Quadratic,args.scale,train_scale=args.train_scale)
     elif args.robust_type=='PH':
-        print('using PH')
         model.avgpool=robustpool.RobustGlobalPool2d(robustpool.PseudoHuber,args.scale,train_scale=args.train_scale)
     elif args.robust_type=='H':
         model.avgpool=robustpool.RobustGlobalPool2d(robustpool.Huber,args.scale,train_scale=args.train_scale)
@@ -207,8 +189,6 @@ def main_worker(gpu, ngpus_per_node, args):
     elif args.robust_type=='TQ':
         model.avgpool=robustpool.RobustGlobalPool2d(robustpool.TruncatedQuadratic,args.scale,train_scale=args.train_scale)
     model.fc=nn.Linear(in_features=512, out_features=200, bias=True)
-    #print(model)
-    #summary(model.cuda(), (3, 224, 224))
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
         # should always set the single device scope, otherwise,
@@ -240,7 +220,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
-    #print(model)
+
     if args.train_scale==1:
         base_params=list(model.parameters())[:-3]+list(model.parameters())[-2:]
         avg_params=list(model.parameters())[-3]
@@ -249,7 +229,7 @@ def main_worker(gpu, ngpus_per_node, args):
         optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                      momentum=args.momentum,
                                      weight_decay=args.weight_decay)
-    print('robust:',args.robust_type,'scale',args.train_scale)
+
     if args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
@@ -337,7 +317,6 @@ def main_worker(gpu, ngpus_per_node, args):
         best_acc1 = max(acc1, best_acc1)
         is_best_train = train_acc1 > best_acc1_train
         best_acc1_train = max(train_acc1, best_acc1_train)
-        print('acc1:',acc1,'best acc:',best_acc1,'train acc1:',train_acc1,'train best acc:',best_acc1_train)
         accs.append(acc1)
         train_accs.append(train_acc1)
         if args.robust_type!='':
@@ -357,12 +336,8 @@ def main_worker(gpu, ngpus_per_node, args):
         #         'best_acc1': best_acc1,
         #         'optimizer' : optimizer.state_dict(),
         #     }, is_best, dir=args.log_dir, filename='checkpoint.pth.tar')
-    #print(accs,train_accs)
-    #print(scales)
-    #print(scales_transformed)
-    filename=args.robust_type+'_'+str(args.outliers)+'_'+str(args.epochs)+'_'+str(num_class)+'_'+str(args.scale)+'_'+str(args.train_scale)+'_'+str(args.train_outlier)+'_'+str(2809)+'.csv'
-    df = pd.DataFrame({"train_accs" : train_accs, "accs" : accs, 'scales':scales,'scales_transformed':scales_transformed})
-    df.to_csv(filename, index=False)
+
+
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args,train_accs):

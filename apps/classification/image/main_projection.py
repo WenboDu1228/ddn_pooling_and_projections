@@ -28,12 +28,10 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
-import utils_projection as utils
 import sys
 sys.path.append("../../../")
 import ddn.pytorch.learnable_projections as projections
 import ddn.pytorch.robust_loss_pytorch.util as util
-import ddn.pytorch.robustpool_tmp as robustpool
 import pandas as pd
 
 #torch.manual_seed(2809)
@@ -186,8 +184,7 @@ def main_worker(gpu, ngpus_per_node, args):
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
     # create model
-    #print(models)
-    #if True:
+
     if args.pretrained:
         print("=> using pre-trained model '{}'".format(args.arch))
         model = models.__dict__[args.arch](pretrained=True)
@@ -195,7 +192,6 @@ def main_worker(gpu, ngpus_per_node, args):
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
     # Insert BN layer and Lp-sphere or Lp-ball projection layer before FC layer
-    #print(model)
     if args.projection_type == 'L1S':
         method = projections.L1Sphere
     elif args.projection_type == 'L1B':
@@ -210,7 +206,6 @@ def main_worker(gpu, ngpus_per_node, args):
         method = projections.LInfBall
     else:
         method = None
-    #print(model)
     #if False:
     args.radius=torch.tensor([args.radius])
     #if False:
@@ -229,15 +224,13 @@ def main_worker(gpu, ngpus_per_node, args):
     elif args.arch=='densenet121':
         model.classifier=nn.Linear(in_features=1024, out_features=10, bias=True)
         in_features=model.classifier.in_features
-    #print(model)
+
     if method:
         print('Prepending FC layer with a BN layer and an {} projection layer with radius {}'.format(method.__name__, args.radius))
         batchnorm = nn.BatchNorm1d(in_features, eps=1e-05, momentum=0.1, affine=False) # without learnable parameters
-        #args.radius=torch.tensor([args.radius])
+
         projection = projections.EuclideanProjection(method=method, radius=args.radius, train_radius=args.train_radius)
-        #print(model.fc)
-        #model.fc=nn.Linear(512, 200)
-        #print(model.fc)
+
         if args.arch=='resnet18':
             model.fc = nn.Sequential(batchnorm, projection, model.fc)
         elif args.arch=='vgg11':
@@ -248,25 +241,7 @@ def main_worker(gpu, ngpus_per_node, args):
             model.fc=nn.Sequential(batchnorm,projection, model.fc)
         elif args.arch=='densenet121':
             model.classifier=nn.Sequential(projection,model.classifier)
-    #from torchinfo import summary
-    #print(model)
-    #summary(model, input_size=(128, 3, 224, 224))
-        #print(model.fc)
-        #print(model.fc)
-    #print(model)
-    # if args.robust_type=='Q':
-    #     model.avgpool=robustpool.RobustGlobalPool2d(robustpool.Quadratic,args.scale,train_scale=args.train_scale)
-    # elif args.robust_type=='PH':
-    #     print('using PH')
-    #     model.avgpool=robustpool.RobustGlobalPool2d(robustpool.PseudoHuber,args.scale,train_scale=args.train_scale)
-    # elif args.robust_type=='H':
-    #     model.avgpool=robustpool.RobustGlobalPool2d(robustpool.Huber,args.scale,train_scale=args.train_scale)
-    # elif args.robust_type=='W':
-    #     model.avgpool=robustpool.RobustGlobalPool2d(robustpool.Welsch,args.scale,train_scale=args.train_scale)
-    # elif args.robust_type=='TQ':
-    #     model.avgpool=robustpool.RobustGlobalPool2d(robustpool.TruncatedQuadratic,args.scale,train_scale=args.train_scale)
-    #print(model)
-    #summary(model.cuda(), (3, 224, 224))
+
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
         # should always set the single device scope, otherwise,
@@ -300,7 +275,7 @@ def main_worker(gpu, ngpus_per_node, args):
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
     base_params=list(model.parameters())[:-3]+list(model.parameters())[-2:]
     avg_params=list(model.parameters())[-3]
-    #print(avg_params)
+
     if args.arch=='alexnet':
         optimizer = torch.optim.SGD(model.parameters(), 0.01,
                                  momentum=args.momentum,
@@ -311,7 +286,7 @@ def main_worker(gpu, ngpus_per_node, args):
                                  weight_decay=args.weight_decay)
     else:
         optimizer = torch.optim.SGD([{'params': base_params}, {'params': avg_params, 'lr': 0.01}], lr=args.lr, momentum=args.momentum,weight_decay=args.weight_decay)
-    # print(asdasdasd)
+
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
@@ -351,9 +326,6 @@ def main_worker(gpu, ngpus_per_node, args):
     # val_loader = torch.utils.data.DataLoader(
     #     valset, batch_size=100, shuffle=False, num_workers=2)
     # num_class=100
-    print('root:',args.data)
-    print('projections',args.projection_type)
-    print('net',args.arch)
     traindir = os.path.join(args.data, 'train')
     valdir = os.path.join(args.data, 'val')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -377,7 +349,6 @@ def main_worker(gpu, ngpus_per_node, args):
             train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
             num_workers=args.workers, pin_memory=True, sampler=train_sampler)
     else:
-        #print('aa')
         trainset = datasets.CIFAR10(
         root='./data', train=True, download=True, transform=transforms.Compose([transforms.Resize(256),transforms.RandomResizedCrop(224),transforms.RandomHorizontalFlip(),transforms.ToTensor(),normalize]))
         train_loader = torch.utils.data.DataLoader(
@@ -393,7 +364,6 @@ def main_worker(gpu, ngpus_per_node, args):
             batch_size=args.batch_size, shuffle=False,
             num_workers=args.workers, pin_memory=True)
     else:
-        print('aa')
         valset = datasets.CIFAR10(
              root='./data', train=False, download=True, transform=transforms.Compose([transforms.Resize(256),transforms.ToTensor(),normalize]))
         val_loader = torch.utils.data.DataLoader(
@@ -426,23 +396,14 @@ def main_worker(gpu, ngpus_per_node, args):
         is_best_train = train_acc1 > best_acc1_train
         best_acc1_train = max(train_acc1, best_acc1_train)
         best_map_train = max(train_map,best_map_train)
-        print('acc1:',round(float(acc1),3),'best acc:',round(float(best_acc1),3),'map',round(map,3),'best map',round(best_map,3))
-        #print('train acc1:',round(float(train_acc1),3),'train best acc:',round(float(best_acc1_train),3),'train map',round(train_map,3),'best train map',round(best_map_train,3))
         accs.append(acc1)
         maps.append(map)
         train_accs.append(train_acc1)
         train_maps.append(train_map)
-        # if args.robust_type!='':
-        #     scales.append(np.array(model.avgpool.scale.detach().cpu()))
-        #     scales_transformed.append(np.array(util.affine_softplus(model.avgpool.scale,lo=1e-5, ref=1.0).detach().cpu()))
-        # else:
-        #     scales.append(0)
-        #     scales_transformed.append(0)
         if args.projection_type=='':
             radius_list.append(0)
             radius_transformed_list.append(0)
         else:
-            #print('r:',np.array(util.affine_softplus(model.fc[1].radius,lo=1e-5, ref=250.0).detach().cpu()))
             if args.arch=='resnet18':
                 r=np.array(model.fc[1].radius.detach().cpu())
             elif args.arch=='alexnet':
@@ -456,9 +417,6 @@ def main_worker(gpu, ngpus_per_node, args):
             radius_list.append(r)
             radius_transformed_list.append(np.array(util.affine_softplus(r,lo=1e-5, ref=250.0)))
         
-    #print(accs,train_accs,radius_transformed_list)
-    # print(scales)
-    # print(scales_transformed)
     filename=str(args.projection_type)+'_'+str(args.epochs)+'_'+str(args.radius.item())+'_'+str(num_class)+'_'+str(args.train_radius)+'_'+args.data.split('/')[-1]+'_'+args.arch+'.csv'
     df = pd.DataFrame({"train maps":train_maps,"maps":maps,"train_accs" : train_accs, "accs" : accs, 'r':radius_list,'scales_transformed':radius_transformed_list})
     df.to_csv(filename, index=False)
