@@ -3,6 +3,7 @@ This repository is for my honours project at the Australian National Univerisity
 
 The thesis will be released after the examination. For all questions, please contact me at wenbodu3@gmail.com.
  
+ ## Running code
 Currently, the repository only contains implementations. In general, it can be devided into adaptive robust pooling and adaptive feature projections. For adaptive robust pooling, we have pseudo-Huber pooling , Huber pooling , Welsch pooling, general and adaptive pooling. The former three was adaptive from [Deep Declarative Networks: A New Hope](https://arxiv.org/pdf/1909.04866.pdf), and the last is the argmin form of the robust function in [A General and Adaptive Robust Loss Function](https://arxiv.org/pdf/1701.03077.pdf).
 Details of the implementations is in [ddn/pytorch/robustpool.py](https://github.com/WenboDu1228/ddn_pooling_and_projections/blob/master/ddn/pytorch/robustpool.py). 
 
