@@ -4,7 +4,7 @@ import scipy.optimize as opt
 
 from ddn.basic.node import *
 
-class LearnableRobustAverageNew(NonUniqueLearnableDeclarativeNode):
+class LearnableRobustAverage(NonUniqueLearnableDeclarativeNode):
     """
     Solves for the one-dimensional robust average,
         minimize f(x, y) = \sum_{i=1}^{n} phi(y - x_i; alpha)
