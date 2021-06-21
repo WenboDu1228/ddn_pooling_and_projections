@@ -30,7 +30,7 @@ import torchvision.datasets as datasets
 import torchvision.models as models
 import sys
 sys.path.append("../../../")
-import ddn.pytorch.learnable_projections as projections
+import ddn.pytorch.adaptive_projections as projections
 import ddn.pytorch.robust_loss_pytorch.util as util
 import pandas as pd
 

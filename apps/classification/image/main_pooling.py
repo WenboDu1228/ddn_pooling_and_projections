@@ -32,7 +32,7 @@ import sys
 sys.path.append("../../../")
 
 import ddn.pytorch.robust_loss_pytorch.util as util
-import ddn.pytorch.robustpool as robustpool
+import ddn.pytorch.adaptive_robustpool as robustpool
 import pandas as pd
 
 #torch.manual_seed(2809)

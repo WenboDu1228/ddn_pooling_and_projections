@@ -15,7 +15,7 @@ import torch.nn.functional as F
 
 import sys
 sys.path.append("../../../")
-import ddn.pytorch.robustpool as robustpool
+import ddn.pytorch.adaptive_robustpool as robustpool
 import ddn.pytorch.robust_loss_pytorch.util as util
 
 class STN3d(nn.Module):
