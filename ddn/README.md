@@ -2,7 +2,7 @@
 
 This document provides a brief description of the modules and utilities of adaptive robust pooling and feature projections.
 
-This document is a subset abd modification of ddn in general. For ddn package in general see [ddn](https://github.com/anucvml/ddn).
+This document is a subset and modification of ddn package in general. For ddn package in general see [ddn](https://github.com/anucvml/ddn).
 
 ## Basic
 
