@@ -14,7 +14,7 @@ Details of the implementations is in [adaptive_robustpool.py](https://github.com
 For adaptive feature projections, we have adaptive L1, L2 and L infinity sphere and ball projections. Details of the implementations is in [adaptive_projections.py](https://github.com/WenboDu1228/ddn_pooling_and_projections/blob/master/ddn/pytorch/adaptive_projections.py).
 
 ### Others
-We also have some tutorials
+We also have some [tutorials
 ](https://github.com/WenboDu1228/ddn_pooling_and_projections/tree/master/tutorials) for demonstration. The experiments on point cloud classification and image classification are under [classification](https://github.com/WenboDu1228/ddn_pooling_and_projections/tree/master/apps/classification).
 
 This repository is still updating. In future, part of the code will merge into offical ddn repository.
