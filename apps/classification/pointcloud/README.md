@@ -26,7 +26,7 @@ The strings available for ROBUST_TYPE are {'Q', 'PH', 'H', 'W', 'TQ', 'AL',''} a
 
 The default number of epochs is 60 and the learning rate starts at 0.001 and decays by a factor of 2 every 20 epochs.
 
-For example, to train PointNet from scratch on GPU 0 with 60% outliers and adaptive Huber pooling replacing max pooling; outliers are presented in training and testinf. use the following command:
+For example, to train PointNet from scratch on GPU 0 with 60% outliers and adaptive Huber pooling replacing max pooling; outliers are presented in training and testing. use the following command:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python3 main.py --outlier_fraction 0.6 --robust_type 'H' --scale 1.0 --epoch 60  --train_scale True --train_outlier True 
