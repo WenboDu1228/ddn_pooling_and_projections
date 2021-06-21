@@ -12,4 +12,5 @@ For adaptive feature projections, we have adaptive L1, L2 and L infinity sphere 
 ](https://github.com/WenboDu1228/ddn_pooling_and_projections/tree/master/tutorials). The experiments on point cloud classification and image classification is under [./apps/classification](https://github.com/WenboDu1228/ddn_pooling_and_projections/tree/master/apps/classification).
 
 This repository is still updating. In future, part of the code will merge into https://github.com/anucvml/ddn.
+
 For deep delarative networks in general, please visit https://github.com/anucvml/ddn.
