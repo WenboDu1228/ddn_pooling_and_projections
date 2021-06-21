@@ -23,3 +23,4 @@ about robust pooling and feature projections only.
 * `ddn.pytorch.node`: defines the PyTorch interface for data processing nodes and declarative nodes.
 * `ddn.pytorch.adaptive_projections`: differentiable adaptive Euclidean projection layers onto Lp balls and spheres.
 * `ddn.pytorch.adaptive_robostpool`: differentiable adaptive robust pooling layers.
+* `ddn.pytorch.robust_loss_pytorch`: some utility functions adapted from [robust_loss_pytorch](https://github.com/jonbarron/robust_loss_pytorch)
