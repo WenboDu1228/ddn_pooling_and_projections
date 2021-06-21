@@ -1,4 +1,4 @@
-# ModelNet40 Classification with Declarative Robust Pooling Nodes
+# ModelNet40 Classification with Adaptive Robust Pooling Nodes
 
 Modified PyTorch PointNet code for testing adaptive robust pooling nodes.
 
