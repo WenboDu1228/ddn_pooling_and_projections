@@ -1,28 +1,26 @@
 # `ddn` Package
 
-This document provides a brief description of the modules and utilities within the `ddn` package.
-For an overview of deep declarative network concepts and demonstration of using the library see the
-[tutorials](https://nbviewer.jupyter.org/github/anucvml/ddn/tree/master/tutorials/).
+This document provides a brief description of the modules and utilities of adaptive robust pooling and feature projections.
+
+This document is a subset and modification of ddn package in general. For ddn package in general see [ddn](https://github.com/anucvml/ddn).
 
 ## Basic
 
 The `ddn.basic` package contains standard python code for experimenting with deep declarative nodes. The
 implementation assumes that all inputs and outputs are vectors (or more complicated data structures
-have been vectorized).
+have been vectorized). In this repository, we concern about robust pooling only.
 
-* `ddn.basic.composition`: implements wrapper code for composing nodes in series or parallel (i.e., building a network).
 * `ddn.basic.node`: defines the interface for data processing nodes and declarative nodes.
-* `ddn.basic.robust_nodes`: implements nodes for robust pooling.
-* `ddn.basic.sample_nodes`: provided examples of deep declarative nodes used for testing and in the tutorials.
+* `ddn.basic.adaptive_robust_nodes`: implements nodes for robust pooling.
 
 
 ## PyTorch
 
-The `ddn.pytorch` package includes efficient implementations of deeep declarative nodes suitable for including
-in an end-to-end learnable model. The code builds on the PyTorch framework and conventions.
+The `ddn.pytorch` package includes efficient implementations of deep declarative nodes suitable for including
+in an end-to-end learnable model. The code builds on the PyTorch framework and conventions. This repository concerns
+about robust pooling and feature projections only.
 
-* `ddn.pytorch.leastsquares`: differentiable weighted least-squares nodes.
 * `ddn.pytorch.node`: defines the PyTorch interface for data processing nodes and declarative nodes.
-* `ddn.pytorch.projections`: differentiable Euclidean projection layers onto Lp balls and spheres.
-* `ddn.pytorch.robostpool`: differentiable robust pooling layers.
-* `ddn.pytorch.sample_nodes`: simple example implementations of deep declarative nodes for PyTorch.
+* `ddn.pytorch.adaptive_projections`: differentiable adaptive Euclidean projection layers onto Lp balls and spheres.
+* `ddn.pytorch.adaptive_robostpool`: differentiable adaptive robust pooling layers.
+* `ddn.pytorch.robust_loss_pytorch`: some utility functions adapted from [robust_loss_pytorch](https://github.com/jonbarron/robust_loss_pytorch).
