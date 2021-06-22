@@ -1,7 +1,8 @@
 # ddn_pooling_and_projections
 This repository is for my honours project at the Australian National Univerisity under the supervision of [Professor Stephen Gould](https://cecs.anu.edu.au/people/stephen-gould). The project is based on [Deep Declarative Networks: A New Hope](https://arxiv.org/pdf/1909.04866.pdf) and closely related to [A General and Adaptive Robust Loss Function](https://arxiv.org/pdf/1701.03077.pdf).
 
-The thesis will be released after the examination. For all questions, please contact me at wenbodu3@gmail.com.
+The thesis will be released after the examination. You can see the [presentation slides](https://github.com/WenboDu1228/ddn_pooling_and_projections/blob/master/wenbodu_final_talk.pdf) for a overview. For all questions, please contact me at wenbodu3@gmail.com.
+
  
 Currently, the repository only contains implementations. In general, it can be devided into adaptive robust pooling and adaptive feature projections.
 
