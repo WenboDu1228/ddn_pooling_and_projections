@@ -4,7 +4,7 @@ This repository is for my honours project at the Australian National Univerisity
 The thesis is in [here](https://github.com/WenboDu1228/ddn_pooling_and_projections/blob/master/WenboDu_thesis.pdf). You can see the [slides](https://github.com/WenboDu1228/ddn_pooling_and_projections/blob/master/wenbodu_final_talk.pdf) or [presentation](https://anu365-my.sharepoint.com/:v:/g/personal/u6361796_anu_edu_au/EQDcUm1kSv5IhrUdJLWapNsBBzUDQ8R4c8bqwN_5bsGoPA?e=tzHRuj) for an overview. For all questions, please contact me at wenbodu3@gmail.com.
 
  
-Currently, the repository only contains implementations. In general, it can be devided into adaptive robust pooling and adaptive feature projections.
+In general, the repo can be devided into adaptive robust pooling and adaptive feature projections.
 
 ## Adaptive robust pooling
 We have pseudo-Huber pooling , Huber pooling , Welsch pooling, general and adaptive pooling. The former three was adaptive from [Deep Declarative Networks: A New Hope](https://arxiv.org/pdf/1909.04866.pdf), and the last is the argmin form of the robust function in [A General and Adaptive Robust Loss Function](https://arxiv.org/pdf/1701.03077.pdf).
